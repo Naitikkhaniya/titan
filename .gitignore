@@ -1,0 +1,37 @@
+# Node.js
+node_modules/
+
+# Logs
+*.log
+
+# Environment files
+.env
+.env.*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/
+
+# Backup files
+*.tar.gz
+
+# Temporary files
+tmp/
+temp/
+
+# Docker
+docker-data/
+
+# Terraform (future)
+.terraform/
+*.tfstate
+*.tfstate.*
+
+# Kubernetes secrets
+secrets.yaml
+
+# Local backups
+backups/
