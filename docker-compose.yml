@@ -1,0 +1,552 @@
+################################################################################
+# Titan Docker Compose Configuration
+#
+# Purpose: Orchestrate multiple containers for the Titan local DevOps platform
+#          Including Express backend and PostgreSQL database
+#
+# Services:
+#   - backend: Node.js Express server on port 3000
+#   - postgres: PostgreSQL database on port 5432
+#
+# Features:
+#   - Custom Docker network (titan-network)
+#   - Named volumes for database persistence
+#   - Health checks for both services
+#   - Environment variable configuration
+#   - Service dependency management
+#
+# Usage:
+#   docker-compose up              # Start all services
+#   docker-compose down            # Stop and remove containers
+#   docker-compose logs -f         # View logs
+#
+# Requirements:
+#   - Docker and Docker Compose installed
+#   - Docker daemon running
+#
+# Author: Titan DevOps Platform
+# Last Modified: 2026-06-17
+################################################################################
+
+# Version 3.9 is the latest major version as of 2026
+# Provides all modern Docker Compose features:
+#   - Named volumes
+#   - Health checks
+#   - Service dependencies
+#   - Custom networks
+#   - Environment variable interpolation
+#
+version: '3.9'
+
+################################################################################
+# Services Definition
+#
+# Services are the containers that Docker Compose will manage
+# Each service gets:
+#   - Its own container
+#   - Connection to the custom network
+#   - Environment variables
+#   - Health checks
+#   - Volume mounts (if needed)
+################################################################################
+
+services:
+
+  ################################################################################
+  # Backend Service - Express.js Application
+  ################################################################################
+  
+  backend:
+    # build: Specify how to build the image for this service
+    #
+    # Context: Path to directory containing Dockerfile
+    #   docker-compose will look for Dockerfile in ./app/backend
+    #
+    # Dockerfile: Specific Dockerfile name
+    #   By default looks for "Dockerfile"
+    #   Can specify alternative: "Dockerfile.prod"
+    #
+    # args: Build-time arguments (passed to docker build --build-arg)
+    #   Can set variables during build
+    #   Example: NODE_ENV=production
+    #
+    # When using 'build', Docker Compose:
+    #   1. Builds image from Dockerfile
+    #   2. Tags image as <project>_<service>:<tag>
+    #   3. Creates and starts container from that image
+    #
+    build:
+      context: ./app/backend
+      dockerfile: Dockerfile
+
+    # Container name: Explicit name for the container
+    #
+    # Without this, Docker Compose generates names like:
+    #   titan_backend_1, titan_backend_2, etc.
+    #
+    # Explicit names are useful for:
+    #   - Easy reference (easier than random names)
+    #   - Documentation
+    #   - Service discovery via network DNS
+    #
+    container_name: titan-backend
+
+    # Ports: Map container ports to host ports
+    #
+    # Syntax: [host_port]:[container_port][/protocol]
+    #   "3000:3000"     # Port 3000 on host → port 3000 in container (TCP)
+    #   "3000:3000/udp" # UDP protocol
+    #   "127.0.0.1:3000:3000" # Bind to specific host interface
+    #
+    # In Docker Compose, you typically use "host:container" format
+    # This exposes the port to external traffic (localhost)
+    #
+    # Why map ports?
+    #   - Container is isolated with internal networking
+    #   - Port mapping allows external access
+    #   - Can map different port on host (8000:3000)
+    #
+    # Note: If containers are on same network, they can communicate
+    #       directly without port mapping (backend:3000 from postgres)
+    #
+    ports:
+      - "3000:3000"
+
+    # Environment: Set environment variables in the container
+    #
+    # Format: KEY=value or KEY: value
+    #
+    # Variables available in container:
+    #   - ACCESSED via: process.env.NODE_ENV (in Node.js)
+    #   - Can be overridden with -e flag: docker-compose run -e VAR=val
+    #   - Can reference other env vars: ${VAR_NAME}
+    #
+    # Common Node.js variables:
+    #   - NODE_ENV: development/production
+    #   - PORT: Server port
+    #   - DEBUG: Enable debug logging
+    #
+    # Database connection variables:
+    #   - Format: postgresql://user:password@host:port/database
+    #   - Host: "postgres" (service name on the network)
+    #   - User and password: From postgres service definition
+    #   - Port: 5432 (default PostgreSQL port)
+    #
+    # Service discovery: Docker Compose automatically adds all services to DNS
+    #   - Service name "postgres" resolves to container IP
+    #   - No need to know container IP address
+    #   - Backend can connect to database using hostname "postgres"
+    #
+    environment:
+      # Node environment
+      NODE_ENV: production
+      PORT: 3000
+      
+      # Database connection string
+      # Format: postgresql://user:password@host:port/database
+      # Host is the service name (postgres), Docker DNS resolves it
+      DATABASE_URL: postgresql://titan:titan_secure_password_2026@postgres:5432/titan
+      
+      # Alternative: individual database variables
+      DB_HOST: postgres        # Service name on custom network
+      DB_PORT: 5432           # PostgreSQL default port
+      DB_USER: titan          # PostgreSQL user
+      DB_PASSWORD: titan_secure_password_2026
+      DB_NAME: titan          # Database name
+
+    # Networks: Define which custom networks this service connects to
+    #
+    # Docker Compose creates a default bridge network automatically
+    # But best practice is to define custom networks for:
+    #   - Better organization
+    #   - Service isolation (can have multiple networks)
+    #   - Clear service dependencies
+    #
+    # Service discovery:
+    #   - Services on same network can communicate
+    #   - By service name (e.g., backend connects to postgres:5432)
+    #   - No need to expose ports for inter-service communication
+    #
+    networks:
+      - titan-network
+
+    # Depends_on: Specify service startup order
+    #
+    # Important: depends_on only controls startup ORDER
+    #   - It does NOT wait for service to be READY
+    #   - It only waits for container to start
+    #   - PostgreSQL might not accept connections yet
+    #
+    # With health checks, Docker Compose can wait for readiness:
+    #   - depends_on postgres succeeds when postgres container starts
+    #   - But we should implement retry logic in application
+    #   - Backend should retry connections if DB is not ready yet
+    #
+    # Best practice: Include health checks and connection retry logic
+    #
+    depends_on:
+      postgres:
+        condition: service_healthy  # Wait for postgres health check
+
+    # Health check: Define how Docker determines if container is healthy
+    #
+    # Structure:
+    #   test: Command to run (returns 0 = healthy, non-zero = unhealthy)
+    #   interval: How often to check (default 30s)
+    #   timeout: How long to wait for check (default 30s)
+    #   retries: Failures before marking unhealthy (default 3)
+    #   start_period: Grace period before first check (default 0s)
+    #
+    # Health check flow:
+    #   1. Start container
+    #   2. Wait start_period (let app initialize)
+    #   3. Every interval, run test command
+    #   4. If fails, increment failure counter
+    #   5. If timeout reached, count as failure
+    #   6. After retries consecutive failures, mark unhealthy
+    #
+    # For backend, we test the /health endpoint:
+    #   - curl http://localhost:3000/health
+    #   - Returns healthy status from /health endpoint
+    #   - 0 = healthy, 1 = unhealthy
+    #
+    # curl options:
+    #   -f: Fail if HTTP status is not 2xx/3xx
+    #   -s: Silent mode (no progress bar)
+    #   -S: Show errors in silent mode
+    #   -o /dev/null: Discard output
+    #
+    # Alternative (if curl not available):
+    #   test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health"]
+    #
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-s", "http://localhost:3000/health"]
+      interval: 30s       # Check every 30 seconds
+      timeout: 5s         # Wait 5 seconds for response
+      retries: 3          # Mark unhealthy after 3 failures
+      start_period: 10s   # Grace period for startup
+
+    # Restart policy: Specify what happens when container exits
+    #
+    # Options:
+    #   no: Do not restart (default)
+    #   always: Always restart, even if exited normally
+    #   unless-stopped: Always restart unless explicitly stopped
+    #   on-failure: Restart only on non-zero exit code
+    #   on-failure:5: Restart on failure, max 5 times
+    #
+    # For production-like scenarios:
+    #   - Use "unless-stopped" to restart after failures
+    #   - Use "on-failure:N" to prevent infinite restart loops
+    #
+    restart: unless-stopped
+
+  ################################################################################
+  # PostgreSQL Service - Database
+  ################################################################################
+  
+  postgres:
+    # Image: Use official PostgreSQL image from Docker Hub
+    #
+    # Format: [REGISTRY/]REPOSITORY[:TAG]
+    #   postgres                    # Latest version (not recommended)
+    #   postgres:16                 # Major version 16 (auto patch updates)
+    #   postgres:16.3               # Specific version (most reproducible)
+    #   postgres:16.3-alpine        # Alpine variant (smaller ~80MB)
+    #   postgres:16.3-bookworm      # Debian variant (larger ~150MB)
+    #
+    # Version considerations:
+    #   - Newer versions have security patches
+    #   - LTS versions are supported longer
+    #   - As of 2026, PostgreSQL 16 is current
+    #
+    # Alpine vs Debian:
+    #   - Alpine: Smaller image, minimal dependencies
+    #   - Debian: Larger, more standard Linux distribution
+    #   - For database, either works, Alpine is preferred for size
+    #
+    # Image pull behavior:
+    #   1. Check local image cache
+    #   2. If not found, pull from registry
+    #   3. Use specific version to avoid unexpected updates
+    #
+    image: postgres:16-alpine
+
+    # Container name for explicit reference
+    container_name: titan-postgres
+
+    # Ports: Map PostgreSQL port to host
+    #
+    # Standard PostgreSQL port: 5432
+    # Mapping allows connecting from host machine
+    #
+    # Important: On same network, backend connects via service name
+    #   Backend in container: "postgres:5432"
+    #   Host machine: "localhost:5432"
+    #
+    # If port 5432 is already in use:
+    #   - Map to different port: "5433:5432"
+    #   - Connection string changes: "postgres://user:pass@localhost:5433/db"
+    #
+    ports:
+      - "5432:5432"
+
+    # Environment: PostgreSQL configuration via environment variables
+    #
+    # PostgreSQL image supports these standard variables:
+    #   POSTGRES_USER: Default admin user (default: postgres)
+    #   POSTGRES_PASSWORD: Admin password
+    #   POSTGRES_DB: Database to create on startup
+    #   POSTGRES_INITDB_ARGS: Additional initdb arguments
+    #
+    # On container startup:
+    #   1. PostgreSQL initializes database cluster
+    #   2. Creates superuser with POSTGRES_USER and POSTGRES_PASSWORD
+    #   3. Creates initial database with POSTGRES_DB name
+    #   4. Runs any init scripts from /docker-entrypoint-initdb.d/
+    #
+    # Note: Admin user is separate from application user
+    #   - POSTGRES_USER/PASSWORD: Superuser (admin)
+    #   - Create separate user for application (titan user)
+    #   - Best practice: App user should not be superuser
+    #
+    # Password security:
+    #   - In production: Use secrets management (Docker secrets, Vault)
+    #   - In development: Use safe defaults
+    #   - Never commit passwords to git
+    #   - Consider using .env file (see override section)
+    #
+    environment:
+      # Superuser (admin) credentials
+      # Used for initial database setup and maintenance
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_admin_password
+      
+      # Initial database to create
+      # This database will be created automatically on first run
+      POSTGRES_DB: titan
+      
+      # Additional initialization arguments
+      # Can set PostgreSQL configuration at startup
+      # Example: -c shared_buffers=256MB
+      POSTGRES_INITDB_ARGS: "-c shared_buffers=256MB -c max_connections=100"
+
+    # Networks: Connect to custom network
+    #
+    # This allows backend service to communicate with postgres
+    # Using service name (postgres) as hostname
+    #
+    networks:
+      - titan-network
+
+    # Volumes: Persist database data
+    #
+    # Volumes are directories that persist data outside containers
+    # When container is removed, volume still exists with data
+    #
+    # Two types:
+    #   Named volumes: Managed by Docker, referenced by name
+    #   Bind mounts: Mount specific host directory
+    #
+    # Named volumes:
+    #   - Defined in top-level "volumes" section
+    #   - Docker manages storage location
+    #   - Portable across systems
+    #   - Backed up with: docker volume inspect
+    #
+    # Container path: /var/lib/postgresql/data
+    #   - Default PostgreSQL data directory in image
+    #   - All database files stored here
+    #   - Mount volume to persist across restarts
+    #
+    # Volume name: titan-db
+    #   - Referenced in volumes section below
+    #   - Must match volume defined in "volumes" section
+    #
+    # Example without volume (data lost on container removal):
+    #   docker-compose down  # Removes container and all data
+    #
+    # Example with volume (data persisted):
+    #   docker-compose down  # Removes container, volume persists
+    #   docker-compose up    # New container mounts existing volume, data restored
+    #
+    volumes:
+      - titan-db:/var/lib/postgresql/data
+
+    # Health check: Verify PostgreSQL is accepting connections
+    #
+    # For PostgreSQL, use pg_isready command
+    #   - Checks if PostgreSQL is accepting connections
+    #   - Returns 0 if ready, non-zero if not ready
+    #   - More reliable than port connectivity check
+    #
+    # pg_isready options:
+    #   -h localhost: Check localhost (default)
+    #   -U postgres: Check as postgres user
+    #   -d postgres: Connect to postgres database (for testing)
+    #
+    # Connection startup time:
+    #   - PostgreSQL may take 5-10 seconds to initialize
+    #   - start_period gives grace period before health checks
+    #   - start_period should be >= expected startup time
+    #
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 10s       # Check every 10 seconds
+      timeout: 5s         # Wait 5 seconds for response
+      retries: 5          # Mark unhealthy after 5 failures
+      start_period: 10s   # Grace period for startup (PostgreSQL initialization)
+
+    # Restart policy
+    restart: unless-stopped
+    
+    # Environment file: Load from .env file
+    #
+    # Can be used instead of inline environment variables
+    # Allows separating configuration from compose file
+    # Useful for sensitive data (passwords)
+    #
+    # File format (.env):
+    #   POSTGRES_PASSWORD=secret_password
+    #   POSTGRES_USER=postgres
+    #
+    # Usage:
+    #   env_file: .env
+    #   Environment in file is merged with inline environment
+    #
+    # Security note:
+    #   - .env files should be in .gitignore
+    #   - Never commit passwords to version control
+    #   - Consider git-crypt or external secrets management for production
+    #
+    # For now, using inline configuration
+    # In production, move to .env or secrets management
+
+################################################################################
+# Networks Definition
+#
+# Custom networks provide isolated communication between services
+# Services on same network can discover each other by name
+# Services on different networks cannot communicate directly
+#
+# Benefits:
+#   - Service isolation and organization
+#   - Automatic DNS resolution (service name to IP)
+#   - Can have multiple networks for different tiers
+#   - Better security (services only see what they need)
+################################################################################
+
+networks:
+  # titan-network: Custom bridge network
+  #
+  # Docker network types:
+  #   bridge: Default, isolated network, services connected must be on same compose file
+  #   host: Use host network directly (not isolated, less common)
+  #   overlay: For Docker Swarm (multi-host clustering)
+  #   macvlan: Advanced networking, assign MAC addresses
+  #
+  # Bridge network (default):
+  #   - Each service gets virtual network interface
+  #   - Docker built-in DNS resolves service names
+  #   - Services can communicate by service name
+  #
+  # Service discovery:
+  #   - backend tries to connect to postgres:5432
+  #   - Docker DNS resolves "postgres" to postgres container IP
+  #   - Connection established between containers
+  #
+  # Example flow:
+  #   1. Backend: "connect to postgres:5432"
+  #   2. Docker DNS: "postgres resolves to 172.20.0.2"
+  #   3. Network: Connect to 172.20.0.2:5432
+  #   4. PostgreSQL container receives connection
+  #
+  titan-network:
+    driver: bridge
+    # Optional: Define custom IP range
+    # ipam:
+    #   config:
+    #     - subnet: 172.20.0.0/16
+
+################################################################################
+# Volumes Definition
+#
+# Named volumes store data persistently outside containers
+# Managed by Docker, not bound to host directories
+#
+# Use cases:
+#   - Database data persistence
+#   - Application state
+#   - Shared data between containers
+#
+# Lifecycle:
+#   - Created when first service uses it
+#   - Persists when container is removed
+#   - Removed only with explicit "docker volume rm"
+################################################################################
+
+volumes:
+  # titan-db: Volume for PostgreSQL data persistence
+  #
+  # Driver: local (Docker manages storage on host)
+  #   - Stored in /var/lib/docker/volumes/titan-db/_data/
+  #   - Managed by Docker (no manual intervention)
+  #   - Portable via docker volume backup/restore
+  #
+  # Lifecycle:
+  #   docker-compose up:     Creates volume if doesn't exist
+  #   docker-compose down:   Keeps volume (data persists)
+  #   docker volume rm:      Manually remove volume (deletes data)
+  #   docker volume prune:   Remove unused volumes
+  #
+  # Backup:
+  #   docker run --rm -v titan-db:/data -v $(pwd):/backup \
+  #     alpine tar czf /backup/db-backup.tar.gz /data
+  #
+  # Restore:
+  #   docker run --rm -v titan-db:/data -v $(pwd):/backup \
+  #     alpine tar xzf /backup/db-backup.tar.gz -C /
+  #
+  titan-db:
+    driver: local
+
+################################################################################
+# Docker Compose Usage Reference
+################################################################################
+
+# Start services:
+#   docker-compose up              # Start in foreground (see logs)
+#   docker-compose up -d           # Start in background (detached)
+#   docker-compose up --build      # Rebuild images before starting
+#   docker-compose up -d postgres  # Start only postgres service
+#
+# Stop services:
+#   docker-compose stop            # Stop containers (can be restarted)
+#   docker-compose down            # Stop and remove containers (volumes persist)
+#   docker-compose down -v         # Stop and remove containers and volumes (data deleted!)
+#
+# View status:
+#   docker-compose ps              # List running containers
+#   docker-compose logs            # View logs
+#   docker-compose logs -f         # Follow logs (tail)
+#   docker-compose logs backend    # Backend service logs only
+#
+# Execute commands:
+#   docker-compose exec backend npm test
+#   docker-compose exec postgres psql -U postgres -c "SELECT version();"
+#
+# Database management:
+#   docker-compose exec postgres psql -U postgres
+#   docker-compose exec postgres createuser -U postgres -P titan
+#
+# Clean up:
+#   docker-compose down            # Stop and remove
+#   docker volume rm titan-db      # Delete database volume
+#   docker-compose down -v         # Stop, remove, delete volumes
+#
+# Environment variables:
+#   docker-compose -e KEY=val up   # Override environment
+#   export KEY=val && docker-compose up  # Set in shell
+#   Create .env file with variables (docker-compose loads automatically)
+
+################################################################################
