@@ -1,0 +1,530 @@
+################################################################################
+# Titan Backend Kubernetes Service
+#
+# Purpose: Define a Kubernetes Service that exposes the Titan Express.js
+#          backend Pods to both internal cluster traffic and external access
+#
+# File: k8s/service-backend.yml
+# Format: Kubernetes YAML manifest
+# API Version: v1 (core Kubernetes API)
+#
+# Service Types:
+#   - ClusterIP (default): Internal cluster access only
+#   - NodePort: Internal + external access via node IP
+#   - LoadBalancer: Cloud load balancer (requires cloud provider)
+#   - ExternalName: External DNS mapping
+#
+# Usage:
+#   kubectl apply -f k8s/service-backend.yml
+#   kubectl get services
+#   kubectl describe service titan-backend-service
+#   kubectl get service titan-backend-service -o wide
+#
+# Author: Titan DevOps Platform
+# Last Modified: 2026-06-20
+################################################################################
+
+################################################################################
+# API Version and Kind
+#
+# apiVersion: v1
+#   - Core Kubernetes API version
+#   - Services use v1 (stable core API)
+#   - Different from Deployment which uses apps/v1
+#
+# kind: Service
+#   - Type of Kubernetes resource
+#   - Service is a networking abstraction
+#   - Provides stable endpoint for accessing Pods
+#   - Handles Pod IP changes transparently
+#
+# Why Services exist:
+#   - Pods are ephemeral (created and destroyed)
+#   - Pod IP addresses change frequently
+#   - Applications need stable endpoints
+#   - Service provides stable IP/hostname for accessing Pods
+#   - Service acts as load balancer for Pod traffic
+################################################################################
+
+apiVersion: v1
+kind: Service
+
+################################################################################
+# Metadata Section
+#
+# name: titan-backend-service
+#   - Unique identifier for this Service
+#   - Used in kubectl commands
+#   - Used by other Pods to discover this service
+#   - DNS name within cluster: titan-backend-service
+#   - Fully qualified DNS: titan-backend-service.default.svc.cluster.local
+#
+# namespace: default
+#   - Kubernetes namespace where Service runs
+#   - Services can only reference Pods in same namespace
+#   - For cross-namespace access, use FQDN
+#
+# labels: Metadata for organizing Services
+#   - Not used for service selection (selector does that)
+#   - Used for querying/filtering services
+#   - Useful for: identifying which service manages what
+################################################################################
+
+metadata:
+  name: titan-backend-service
+  namespace: default
+  labels:
+    # Labels for organizing and identifying this service
+    app: titan-backend
+    tier: backend
+    version: "1.0"
+    service-type: backend-api
+
+################################################################################
+# Specification Section (spec)
+#
+# spec: Service configuration
+#
+# type: Service type determines how the Service exposes Pods
+#
+# Service Types:
+#
+# 1. ClusterIP (default)
+#    - Only internal cluster access
+#    - Assigned internal IP (10.x.x.x)
+#    - Accessible only from within cluster
+#    - Other Pods connect via: titan-backend-service:3000
+#    - Use case: Internal services (backend, database)
+#    - Diagram:
+#      Pod A ──> Service (ClusterIP) ──> Pods B
+#      (internal connection via cluster DNS)
+#
+# 2. NodePort (used here)
+#    - Extends ClusterIP functionality
+#    - Plus external access via node IP
+#    - Assigned node port (30000-32767 range)
+#    - Accessible from: <node-ip>:<nodePort>
+#    - Use case: Development, testing, external access without load balancer
+#    - Diagram:
+#      External Client ──> Node:30000 ──> Service ──> Pod:3000
+#      All nodes in cluster accept traffic on same port
+#
+# 3. LoadBalancer
+#    - Extends NodePort functionality
+#    - Plus provisions cloud load balancer
+#    - Requires cloud provider support (AWS, GCP, Azure)
+#    - External traffic goes through load balancer
+#    - Use case: Production, high availability
+#    - Diagram:
+#      External Client ──> Cloud Load Balancer ──> Node:30000 ──> Service ──> Pod
+#
+# 4. ExternalName
+#    - Maps service to external DNS name
+#    - No load balancing or proxying
+#    - Use case: Access external databases, third-party APIs
+#    - Example: Database in different cluster
+#
+# For Titan backend:
+#   - NodePort chosen for: Development/testing on local Kubernetes
+#   - Allows external access via: <cluster-node>:30000+
+#   - Good for local development, minikube, kind
+#   - For production: Use LoadBalancer or Ingress
+################################################################################
+
+spec:
+  type: NodePort
+
+  ################################################################################
+  # Selector Section
+  #
+  # selector: Label selector to identify Pods managed by this Service
+  #
+  # How selectors work:
+  #   1. Service queries all Pods in namespace
+  #   2. Finds Pods with matching labels
+  #   3. Route traffic to matching Pods
+  #   4. Adds/removes Pods as they are created/destroyed
+  #   5. All matching Pods receive traffic (load balanced)
+  #
+  # Selector matching:
+  #   - Service selector: app: titan-backend
+  #   - Pod labels: must have label app: titan-backend
+  #   - Service: "Route traffic to all Pods with this label"
+  #
+  # Dynamic Pod selection:
+  #   - Deployment creates Pod with label app: titan-backend
+  #   - Service automatically discovers Pod (selector matches)
+  #   - Service adds Pod to load balancing pool
+  #   - Pod receives traffic
+  #   - When Pod is deleted, Service automatically removes it
+  #   - When new Pod is created, Service adds it
+  #   - No manual configuration needed
+  #
+  # Multiple Services selecting same Pods:
+  #   - Service A: selector app: titan-backend
+  #   - Service B: selector app: titan-backend
+  #   - Service C: selector tier: backend
+  #   - All services can route to same Pods
+  #   - Allows multiple entry points to same Pods
+  #
+  # CRITICAL: Pod labels must match selector
+  #   Deployment pod template labels:
+  #     labels:
+  #       app: titan-backend
+  #       tier: backend
+  #   Service selector:
+  #     selector:
+  #       app: titan-backend
+  #   Result: Service routes to Pods with app: titan-backend label
+  #
+  # If labels don't match:
+  #   - Service shows 0 endpoints
+  #   - Connections fail (no Pods to route to)
+  #   - Common debugging issue
+  ################################################################################
+
+  selector:
+    app: titan-backend
+    # Selector: Route traffic to Pods labeled with app: titan-backend
+    # This label must exist in Deployment Pod template
+    # Service will route to all matching Pods
+
+  ################################################################################
+  # Ports Section
+  #
+  # ports: Define how Service exposes Pods
+  #
+  # Port types:
+  #   - port: Port on Service (what clients connect to)
+  #   - targetPort: Port on Pod (where traffic is forwarded)
+  #   - nodePort: Port on Node (external access via NodePort)
+  #   - name: Named port (optional but recommended)
+  #
+  # Port terminology:
+  #
+  #   Client (outside cluster):
+  #     curl http://<node-ip>:30000/health
+  #     ↓ (nodePort mapping)
+  #   Node:30000
+  #     ↓ (service routing)
+  #   Service Port 3000
+  #     ↓ (target port mapping)
+  #   Pod:3000
+  #     ↓
+  #   Express.js listening on 3000
+  #
+  # Port mapping scenarios:
+  #
+  # Scenario 1: All ports same (simplest)
+  #   port: 3000
+  #   targetPort: 3000
+  #   nodePort: 30000
+  #   Meaning: External :30000 → Service :3000 → Pod :3000
+  #
+  # Scenario 2: Different external port
+  #   port: 80              (service exposed on port 80)
+  #   targetPort: 3000      (pod listens on 3000)
+  #   nodePort: 30000
+  #   Meaning: External :30000 → Service :80 → Pod :3000
+  #   Use case: Hide internal port, normalize to HTTP 80
+  #
+  # Scenario 3: Multiple ports
+  #   - name: http
+  #     port: 80
+  #     targetPort: 3000
+  #   - name: metrics
+  #     port: 9090
+  #     targetPort: 9090
+  #   Meaning: Service has two entry points
+  #
+  # nodePort assignment:
+  #   - If not specified: Kubernetes assigns random (30000-32767)
+  #   - If specified: Must be in range 30000-32767
+  #   - Can be same across all nodes
+  #   - All cluster nodes accept traffic on nodePort
+  #
+  # For Titan backend:
+  #   - Pod listens on: 3000
+  #   - Service exposes on: 3000
+  #   - External access on: 30000 (auto-assigned)
+  #   - Flow: Client :30000 → Service :3000 → Pod :3000
+  ################################################################################
+
+  ports:
+  - name: http
+    # name: Named port for reference
+    # Used in: selectors, other manifests
+    # Makes configuration more readable
+    # Alternative: targetPort: backend (if pod port is named)
+    # Port names help in documentation and multi-port services
+
+    port: 3000
+    # port: Port on the Service
+    # This is where clients inside cluster connect
+    # Internal Pods connect to: titan-backend-service:3000
+    # From another Pod: curl http://titan-backend-service:3000/health
+    # This is the ClusterIP port (internal cluster access)
+
+    targetPort: 3000
+    # targetPort: Port on the Pod to forward traffic to
+    # Must match where application listens
+    # Express.js listens on port 3000
+    # Traffic is forwarded from service:3000 to pod:3000
+    # Can be: number (3000) or name (if pod port has name)
+
+    protocol: TCP
+    # protocol: Network protocol
+    # TCP (default) for HTTP
+    # UDP for DNS-like services
+    # SCTP for advanced use cases
+    # Express.js is HTTP which is TCP-based
+
+    nodePort: 30000
+    # nodePort: Port on cluster nodes for external access
+    # External clients connect via: <node-ip>:30000
+    # Range: 30000-32767 (NodePort reserved range)
+    # Specified manually here (default: auto-assign)
+    # If not specified, Kubernetes assigns random port in range
+    # All nodes listen on same port (any node works)
+    #
+    # NodePort allocation:
+    #   You have cluster with nodes:
+    #     Node1: 10.0.0.1
+    #     Node2: 10.0.0.2
+    #     Node3: 10.0.0.3
+    #   You can access service via:
+    #     http://10.0.0.1:30000/health
+    #     http://10.0.0.2:30000/health
+    #     http://10.0.0.3:30000/health
+    #   All work, automatically load balanced to Pods
+    #
+    # Internal access (ClusterIP):
+    #   From other Pod:
+    #     curl http://titan-backend-service:3000/health
+    #   Not using nodePort, using internal cluster IP
+    #
+    # External access (NodePort):
+    #   From outside cluster:
+    #     curl http://<node-ip>:30000/health
+    #   Goes through node port to reach service
+
+################################################################################
+# Traffic Policy (Optional)
+#
+# trafficPolicy: Control traffic behavior
+#
+# Options:
+#   Cluster: Route to Pods across all nodes (default)
+#   Local: Route to Pods on same node only
+#
+# Local reduces latency but may cause uneven load distribution
+# Cluster (default) provides better load balancing
+#
+# Not included here, using default Cluster policy
+################################################################################
+
+  ################################################################################
+  # Session Affinity (Optional)
+  #
+  # sessionAffinity: Client IP-based sticky sessions
+  #
+  # Options:
+  #   None (default): Each request may go to different Pod
+  #   ClientIP: Same client IP always goes to same Pod
+  #
+  # Use case: Sessions that need to stick to same instance
+  # Example: In-memory session storage
+  # Issue: StateLess applications shouldn't need this
+  # Our Express backend should be stateless
+  #
+  # Not included here, using default None (load balanced)
+  ################################################################################
+
+################################################################################
+# Service Endpoint Discovery
+#
+# What happens when Service is created:
+#
+# 1. Service created with selector: app: titan-backend
+# 2. Kubernetes finds all Pods with matching labels
+# 3. Service creates Endpoints object
+# 4. Endpoints contains list of Pod IPs to route traffic to
+# 5. When Pod created: Endpoint added to list
+# 6. When Pod deleted: Endpoint removed from list
+# 7. Service routes to current endpoints
+#
+# Viewing endpoints:
+#   kubectl get endpoints titan-backend-service
+#   kubectl describe service titan-backend-service
+#   Shows: Endpoints: 10.244.0.5:3000 (Pod IP:port)
+#
+# If Service shows 0 endpoints:
+#   - No Pods match selector
+#   - Check Pod labels: kubectl get pods --show-labels
+#   - Check selector: kubectl describe service
+#   - Ensure labels match: app: titan-backend
+################################################################################
+
+################################################################################
+# Service DNS Names
+#
+# DNS resolution within cluster:
+#
+# Service FQDN: titan-backend-service.default.svc.cluster.local
+# Can be accessed as:
+#   - titan-backend-service (same namespace)
+#   - titan-backend-service.default (same cluster)
+#   - titan-backend-service.default.svc.cluster.local (FQDN)
+#
+# From another Pod:
+#   curl http://titan-backend-service:3000/health
+#   curl http://titan-backend-service.default:3000/health
+#   curl http://titan-backend-service.default.svc.cluster.local:3000/health
+#
+# DNS is managed by CoreDNS (or kube-dns)
+# Kubernetes automatically creates DNS records for Services
+# No manual DNS configuration needed
+#
+# Cross-namespace access:
+#   From different namespace:
+#   curl http://titan-backend-service.default:3000/health
+#   Include namespace in domain name
+################################################################################
+
+################################################################################
+# Load Balancing Behavior
+#
+# Service automatically load balances traffic:
+#
+# Example with 3 Pods:
+#   Pod 1: 10.244.0.5:3000
+#   Pod 2: 10.244.0.6:3000
+#   Pod 3: 10.244.0.7:3000
+#
+# Service endpoint: titan-backend-service:3000
+# Traffic to service is distributed:
+#   Request 1 → Pod 1
+#   Request 2 → Pod 2
+#   Request 3 → Pod 3
+#   Request 4 → Pod 1
+#   (round-robin by default)
+#
+# Each request goes to different Pod (default round-robin)
+# Distributes load across available Pods
+# If Pod is unhealthy, service removes from load balancing
+#
+# Scaling impact:
+#   Scale from 1 to 3 replicas:
+#   kubectl scale deployment titan-backend --replicas=3
+#   Service automatically:
+#   1. Discovers new Pods (label selector)
+#   2. Adds to endpoints
+#   3. Distributes traffic across 3 Pods
+################################################################################
+
+################################################################################
+# Kubectl Commands for Service Management
+################################################################################
+
+# Create/apply service:
+#   kubectl apply -f k8s/service-backend.yml
+#
+# View services:
+#   kubectl get services
+#   kubectl get services -o wide
+#   kubectl get service titan-backend-service
+#   kubectl get svc  (short form)
+#
+# Service details:
+#   kubectl describe service titan-backend-service
+#   Shows: Name, Namespace, Type, IP, Endpoints, Port mappings
+#
+# View endpoints (Pods service routes to):
+#   kubectl get endpoints
+#   kubectl get endpoints titan-backend-service
+#   Shows: IP addresses of Pods traffic routes to
+#
+# View service endpoints specifically:
+#   kubectl describe service titan-backend-service
+#   Shows "Endpoints:" section with Pod IPs
+#
+# Delete service:
+#   kubectl delete service titan-backend-service
+#   kubectl delete -f k8s/service-backend.yml
+#
+# Access service:
+#
+#   From inside cluster (another Pod):
+#     curl http://titan-backend-service:3000/health
+#
+#   From outside cluster (external client):
+#     First find node IP:
+#       kubectl get nodes -o wide
+#     Then connect to:
+#       curl http://<node-ip>:30000/health
+#
+#   From local machine (minikube/kind):
+#     minikube service titan-backend-service
+#     kind load docker-image titan-backend:1.0 --name my-cluster
+#
+#   Port forwarding (development):
+#     kubectl port-forward service/titan-backend-service 3000:3000
+#     curl http://localhost:3000/health
+
+################################################################################
+# Relationship with Deployment
+#
+# How Service and Deployment work together:
+#
+# Deployment (k8s/deployment-backend.yml):
+#   - Manages Pod creation and updates
+#   - Ensures replicas are running
+#   - Pods created with label: app: titan-backend
+#
+# Service (k8s/service-backend.yml):
+#   - Finds Pods with label: app: titan-backend
+#   - Routes traffic to matching Pods
+#   - Provides stable endpoint
+#
+# Flow:
+#   1. kubectl apply -f deployment-backend.yml
+#      → Deployment creates Pods with label app: titan-backend
+#   2. kubectl apply -f service-backend.yml
+#      → Service discovers Pods with matching label
+#      → Service routes traffic to those Pods
+#   3. Client connects to Service
+#      → Service forwards to Pods
+#      → Pods run Express application
+#      → Response sent back through Service
+#
+# Together they provide:
+#   - Deployment: Pod lifecycle management, scaling, updates
+#   - Service: Networking, load balancing, stable endpoint
+#   - External: NodePort access to Service
+################################################################################
+
+################################################################################
+# Differences from Docker Compose
+#
+# Docker Compose networking:
+#   - Services communicate by service name
+#   - docker-compose: "postgres" resolves to container IP
+#   - Port mapping: ports: ["3000:3000"]
+#   - Simple, works for development
+#
+# Kubernetes Service:
+#   - Service is explicit networking resource
+#   - Service has stable IP (ClusterIP)
+#   - Service has DNS name (service discovery)
+#   - Service has load balancing
+#   - Service can be accessed internally (ClusterIP) or externally (NodePort)
+#   - More complex but production-grade
+#   - Handles Pods that come and go (more resilient)
+#
+# Kubernetes advantages:
+#   - Services survive Pod recreation (stable endpoint)
+#   - Automatic load balancing across Pods
+#   - Service discovery via DNS
+#   - Multiple ways to expose (ClusterIP, NodePort, LoadBalancer)
+#   - Declarative networking (kubernetes manages it)
+################################################################################
